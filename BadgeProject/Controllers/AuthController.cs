@@ -16,7 +16,7 @@ namespace BadgeProject.Controllers
             _authService = authService;
         }
 
-        // 1. Register User
+      
         [HttpPost("register")]
         public async Task<IActionResult> Register([FromForm] RegisterDTO registerDto)
         {
@@ -26,7 +26,7 @@ namespace BadgeProject.Controllers
             return StatusCode(response.StatusCode, response);
         }
 
-        // 2. Verify OTP
+       
         [HttpPost("verify-otp")]
         public async Task<IActionResult> VerifyOtp([FromForm] VerifyEmailDTO verifyOtpDto)
         {
@@ -36,7 +36,7 @@ namespace BadgeProject.Controllers
             return StatusCode(response.StatusCode, response);
         }
 
-        // 3. Resend OTP
+        
         [HttpPost("resend-otp")]
         public async Task<IActionResult> ResendOtp([FromForm] ResentOtpDTO resendOtpDto)
         {
@@ -46,7 +46,7 @@ namespace BadgeProject.Controllers
             return StatusCode(response.StatusCode, response);
         }
 
-        // 4. Login
+       
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromForm] LoginDTO loginDto)
         {

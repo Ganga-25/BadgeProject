@@ -32,125 +32,169 @@ namespace BadgeProject.Service
             registerDTO.PhoneNumber = registerDTO.PhoneNumber.Trim();
             registerDTO.Password = registerDTO.Password.Trim();
 
-            // Check if user already exists
-            var existingUser = await _context.Users
-                .Include(u => u.userOtps) // Include OTPs for safety
-                .SingleOrDefaultAsync(u => u.Email == registerDTO.Email);
-
-            if (existingUser != null)
-            {
-                if (!existingUser.IsEmailVerified)
-                {
-                    // User exists but not verified → regenerate OTP
-                    return await RegenerateOtp(new ResentOtpDTO { Email = existingUser.Email });
-                }
-                return new AuthResponse(409, "Conflict! User already exists.");
-            }
-
-            // Map DTO to User entity
-            var user = _mapper.Map<User>(registerDTO);
-            user.Password = BCrypt.Net.BCrypt.HashPassword(registerDTO.Password);
-            user.IsEmailVerified = false;
-            user.CreatedAt = DateTime.UtcNow;
-
             try
             {
-                // Add user
+            
+                var existingUser = await _context.Users
+                    .Include(u => u.userOtps)
+                    .SingleOrDefaultAsync(u => u.Email == registerDTO.Email);
+
+                if (existingUser != null)
+                {
+                    if (!existingUser.IsEmailVerified)
+                    {
+                        
+                        return await RegenerateOtp(new ResentOtpDTO { Email = existingUser.Email });
+                    }
+                    return new AuthResponse(409, "Conflict! User already exists.");
+                }
+
+              
+                var user = _mapper.Map<User>(registerDTO);
+                user.Password = BCrypt.Net.BCrypt.HashPassword(registerDTO.Password);
+                user.IsEmailVerified = false;
+                user.CreatedAt = DateTime.UtcNow;
+
                 await _context.Users.AddAsync(user);
                 await _context.SaveChangesAsync();
-            }
-            catch (DbUpdateException dbEx)
-            {
-                return new AuthResponse(500, "Database error while adding user: " + dbEx.InnerException?.Message ?? dbEx.Message);
-            }
 
-            // Generate OTP
-            var otpCode = new Random().Next(1000, 9999).ToString("D4");
-            var otp = new UserOtp
-            {
-                UserId = user.Id,
-                OtpCode = otpCode,
-                ExpiresAt = DateTime.UtcNow.AddMinutes(2),
-                IsUsed = false
-            };
+               
+                var otpCode = new Random().Next(1000, 9999).ToString("D4");
+                var otp = new UserOtp
+                {
+                    UserId = user.Id,
+                    OtpCode = otpCode,
+                    ExpiresAt = DateTime.UtcNow.AddMinutes(2),
+                    IsUsed = false
+                };
 
-            try
-            {
-                await _context.UserOtps.AddAsync(otp); // Ensure DbSet is called Otps
+                await _context.UserOtps.AddAsync(otp);
                 await _context.SaveChangesAsync();
+
+              
+                var emailDto = new EmailDTO { ToEmail = user.Email, Otp = otpCode };
+                var emailResponse = await _emailService.SendOtpAsync(emailDto);
+
+                if (emailResponse.StatusCode != 200)
+                    return new AuthResponse(emailResponse.StatusCode == 500 ? 500 : 400, emailResponse.Message);
+
+                return new AuthResponse(200, "Registration successful! OTP sent to email.");
             }
             catch (DbUpdateException dbEx)
             {
-                return new AuthResponse(500, "Database error while adding OTP: " + dbEx.InnerException?.Message ?? dbEx.Message);
+                
+                return new AuthResponse(500, "Database error: " + dbEx.InnerException?.Message ?? dbEx.Message);
             }
-
-            // Send OTP email
-            var emailDto = new EmailDTO { ToEmail = user.Email, Otp = otpCode };
-            var emailResponse = await _emailService.SendOtpAsync(emailDto);
-
-            if (emailResponse.StatusCode != 200)
-                return new AuthResponse(emailResponse.StatusCode == 500 ? 500 : 400, emailResponse.Message);
-
-            return new AuthResponse(200, "Registration successful! OTP sent to email.");
+            catch (Exception ex)
+            {
+                
+                return new AuthResponse(500, "An unexpected error occurred: " + ex.Message);
+            }
         }
+
 
         public async Task<AuthResponse> VerifyOTP(VerifyEmailDTO verifyEmailDTO)
         {
-            var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == verifyEmailDTO.Email);
-            if (user == null) return new AuthResponse (400, "Invalid email" );
+            try
+            {
+                var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == verifyEmailDTO.Email);
+                if (user == null)
+                    return new AuthResponse(400, "Invalid email");
 
-            var otp = await _context.UserOtps
-                .Where(o => o.UserId == user.Id && o.OtpCode == verifyEmailDTO.Otp && !o.IsUsed)
-                .OrderByDescending(o => o.ExpiresAt)
-                .FirstOrDefaultAsync();
+                var otp = await _context.UserOtps
+                    .Where(o => o.UserId == user.Id && o.OtpCode == verifyEmailDTO.Otp && !o.IsUsed)
+                    .OrderByDescending(o => o.ExpiresAt)
+                    .FirstOrDefaultAsync();
 
-            if (otp == null) return new AuthResponse ( 400,  "Invalid OTP" );
-            if (otp.ExpiresAt <= DateTime.UtcNow) return new AuthResponse (400, "OTP expired. Please regenerate.");
+                if (otp == null)
+                    return new AuthResponse(400, "Invalid OTP");
 
-            otp.IsUsed = true;
-            user.IsEmailVerified = true;
-            await _context.SaveChangesAsync();
+                if (otp.ExpiresAt <= DateTime.UtcNow)
+                    return new AuthResponse(400, "OTP expired. Please regenerate.");
 
-            return new AuthResponse (200,  "Email verified successfully!");
+                otp.IsUsed = true;
+                user.IsEmailVerified = true;
+
+                await _context.SaveChangesAsync();
+
+                return new AuthResponse(200, "Email verified successfully!");
+            }
+            catch (DbUpdateException dbEx)
+            {
+                
+                return new AuthResponse(500, $"Database error occurred while verifying OTP.{dbEx}");
+            }
+            catch (Exception ex)
+            {
+              
+                return new AuthResponse(500, $"An unexpected error occurred. Please try again later. {ex.Message}");
+            }
         }
+
 
         public async Task<AuthResponse> LoginAsync(LoginDTO loginDTO)
         {
-            var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == loginDTO.Email);
-            if (user == null || !BCrypt.Net.BCrypt.Verify(loginDTO.Password, user.Password))
-                return new AuthResponse (400, "Invalid credentials" );
+            try
+            {
+                var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == loginDTO.Email);
+                if (user == null || !BCrypt.Net.BCrypt.Verify(loginDTO.Password, user.Password))
+                    return new AuthResponse(400, "Invalid credentials");
 
-            if (!user.IsEmailVerified) return new AuthResponse ( 400, "Email not verified" );
+                if (!user.IsEmailVerified) return new AuthResponse(400, "Email not verified");
 
-            return new AuthResponse(200, "Login successful!");
+                return new AuthResponse(200, "Login successful!");
+
+            }
+            catch (Exception ex)
+            {
+                return new AuthResponse(500, $"server error{ex.Message}");
+            }
+
         }
 
         public async Task<AuthResponse> RegenerateOtp(ResentOtpDTO resentOtpDTO)
         {
-            var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == resentOtpDTO.Email);
-            if (user == null) return new AuthResponse ( 400,  "Invalid email" );
-            if (user.IsEmailVerified) return new AuthResponse ( 400,  "User already verified" );
-
-            // Generate new OTP
-            var otpCode = new Random().Next(1000, 9999).ToString("D4");
-            var otp = new UserOtp
+            try
             {
-                UserId = user.Id,
-                OtpCode = otpCode,
-                ExpiresAt = DateTime.UtcNow.AddMinutes(2),
-                IsUsed = false
-            };
+                var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == resentOtpDTO.Email);
+                if (user == null)
+                    return new AuthResponse(400, "Invalid email");
 
-            _context.UserOtps.Add(otp);
-            await _context.SaveChangesAsync();
+                if (user.IsEmailVerified)
+                    return new AuthResponse(400, "User already verified");
 
-            var emailDto = new EmailDTO { ToEmail = user.Email, Otp = otpCode };
-            var emailResponse = await  _emailService.SendOtpAsync(emailDto);
+                // Generate new OTP
+                var otpCode = new Random().Next(1000, 9999).ToString("D4");
+                var otp = new UserOtp
+                {
+                    UserId = user.Id,
+                    OtpCode = otpCode,
+                    ExpiresAt = DateTime.UtcNow.AddMinutes(2),
+                    IsUsed = false
+                };
 
-            if (emailResponse.StatusCode != 200)
-                return new AuthResponse (emailResponse.StatusCode,  emailResponse.Message );
+                _context.UserOtps.Add(otp);
+                await _context.SaveChangesAsync();
 
-            return new AuthResponse ( 200,  "New OTP sent to your email!" );
+                var emailDto = new EmailDTO { ToEmail = user.Email, Otp = otpCode };
+                var emailResponse = await _emailService.SendOtpAsync(emailDto);
+
+                if (emailResponse.StatusCode != 200)
+                    return new AuthResponse(emailResponse.StatusCode, emailResponse.Message);
+
+                return new AuthResponse(200, "New OTP sent to your email!");
+            }
+            catch (DbUpdateException dbEx)
+            {
+
+                return new AuthResponse(500, $"Database error occurred while generating OTP.{dbEx}");
+            }
+            catch (Exception ex)
+            {
+
+                return new AuthResponse(500, $"An unexpected error occurred. Please try again later. {ex.Message}");
+            }
         }
+
     }
-    }
+}
