@@ -1,0 +1,6 @@
+@BadgeProject_HostAddress = http://localhost:5010
+
+GET {{BadgeProject_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
